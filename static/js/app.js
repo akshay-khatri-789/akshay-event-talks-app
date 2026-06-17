@@ -11,6 +11,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const notesListContainer = document.getElementById('notes-list');
     const detailsPanel = document.getElementById('details-panel');
     const btnRefresh = document.getElementById('btn-refresh');
+    const themeToggle = document.getElementById('theme-toggle');
+    const themeToggleText = document.getElementById('theme-toggle-text');
+    const btnExportCSV = document.getElementById('btn-export-csv');
     
     // Tweet Modal Elements
     const tweetModal = document.getElementById('tweet-modal');
@@ -26,8 +29,28 @@ document.addEventListener('DOMContentLoaded', () => {
     // Load initial data
     fetchReleaseNotes();
 
-    // Event Listeners
     btnRefresh.addEventListener('click', () => fetchReleaseNotes(true));
+    
+    // Theme Toggle Listener
+    themeToggle.addEventListener('click', () => {
+        document.body.classList.toggle('light-mode');
+        const isLight = document.body.classList.contains('light-mode');
+        themeToggleText.textContent = isLight ? 'Dark Mode' : 'Light Mode';
+        
+        const iconLight = themeToggle.querySelector('.theme-icon-light');
+        const iconDark = themeToggle.querySelector('.theme-icon-dark');
+        if (isLight) {
+            iconLight.style.display = 'none';
+            iconDark.style.display = 'block';
+        } else {
+            iconLight.style.display = 'block';
+            iconDark.style.display = 'none';
+        }
+        showToast(`Switched to ${isLight ? 'Light' : 'Dark'} Mode`, 'success');
+    });
+
+    // Export CSV Listener
+    btnExportCSV.addEventListener('click', exportToCSV);
     
     searchInput.addEventListener('input', (e) => {
         searchQuery = e.target.value.toLowerCase();
@@ -174,11 +197,30 @@ document.addEventListener('DOMContentLoaded', () => {
             item.innerHTML = `
                 <div class="note-item-meta">
                     <span class="note-item-date">${dateDisplay}</span>
-                    <div style="display: flex; gap: 0.25rem;">${badgesHtml}</div>
+                    <div style="display: flex; gap: 0.25rem; align-items: center;">
+                        ${badgesHtml}
+                        <button class="btn-copy-card" aria-label="Copy note to clipboard" title="Copy update to clipboard">
+                            <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                        </button>
+                    </div>
                 </div>
                 <h4 class="note-item-title">${note.title}</h4>
                 <p class="note-item-snippet">${snippet}</p>
             `;
+            
+            const btnCopy = item.querySelector('.btn-copy-card');
+            btnCopy.addEventListener('click', (e) => {
+                e.stopPropagation(); // Prevent card selection
+                
+                const copyText = `${note.title} (${dateDisplay})\n\n${snippet}\n\nRead more: ${note.link}`;
+                
+                navigator.clipboard.writeText(copyText).then(() => {
+                    showToast('Update copied to clipboard!', 'success');
+                }).catch(err => {
+                    console.error('Failed to copy: ', err);
+                    showToast('Failed to copy to clipboard', 'error');
+                });
+            });
             
             item.addEventListener('click', () => {
                 activeNote = note;
@@ -320,6 +362,42 @@ document.addEventListener('DOMContentLoaded', () => {
         window.open(twitterUrl, '_blank');
         closeTweetModal();
         showToast('Redirected to Twitter to publish your Tweet!', 'success');
+    }
+
+    function exportToCSV() {
+        if (releaseNotes.length === 0) {
+            showToast('No data to export', 'error');
+            return;
+        }
+
+        const headers = ['Title', 'Date', 'Link', 'Categories', 'Snippet'];
+        const rows = releaseNotes.map(note => {
+            const dateDisplay = formatDate(note.published || note.updated);
+            const snippet = extractSnippet(note.content).replace(/"/g, '""'); // Escape double quotes
+            const categories = note.categories.join(', ');
+            const escapedTitle = note.title.replace(/"/g, '""');
+            return [
+                `"${escapedTitle}"`,
+                `"${dateDisplay}"`,
+                `"${note.link}"`,
+                `"${categories}"`,
+                `"${snippet}"`
+            ];
+        });
+
+        const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+        
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', `bigquery_release_notes_${new Date().toISOString().slice(0,10)}.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        showToast('CSV Export completed!', 'success');
     }
 
     // Toast Notifications
