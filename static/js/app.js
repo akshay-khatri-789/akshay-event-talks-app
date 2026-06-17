@@ -4,9 +4,11 @@ document.addEventListener('DOMContentLoaded', () => {
     let activeNote = null;
     let currentCategoryFilter = 'all';
     let searchQuery = '';
+    let readNotes = JSON.parse(localStorage.getItem('bq_read_notes') || '[]');
 
     // DOM Elements
     const searchInput = document.getElementById('search-input');
+    const searchClear = document.getElementById('search-clear');
     const filterButtons = document.querySelectorAll('.filter-btn');
     const notesListContainer = document.getElementById('notes-list');
     const detailsPanel = document.getElementById('details-panel');
@@ -14,6 +16,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const themeToggle = document.getElementById('theme-toggle');
     const themeToggleText = document.getElementById('theme-toggle-text');
     const btnExportCSV = document.getElementById('btn-export-csv');
+    const offlineBanner = document.getElementById('offline-banner');
+    const appContainer = document.querySelector('.app-container');
     
     // Tweet Modal Elements
     const tweetModal = document.getElementById('tweet-modal');
@@ -54,6 +58,15 @@ document.addEventListener('DOMContentLoaded', () => {
     
     searchInput.addEventListener('input', (e) => {
         searchQuery = e.target.value.toLowerCase();
+        searchClear.style.display = searchQuery ? 'block' : 'none';
+        renderList();
+    });
+
+    searchClear.addEventListener('click', () => {
+        searchInput.value = '';
+        searchQuery = '';
+        searchClear.style.display = 'none';
+        searchInput.focus();
         renderList();
     });
 
@@ -97,8 +110,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 return { ...note, categories };
             });
 
+            // Handle Offline/Cached Banner
+            if (data.warning) {
+                offlineBanner.textContent = `⚠️ Offline Mode: ${data.warning}`;
+                offlineBanner.style.display = 'flex';
+            } else if (data.cached && force) {
+                offlineBanner.textContent = `⚠️ Sync issues. Showing cached release notes.`;
+                offlineBanner.style.display = 'flex';
+            } else {
+                offlineBanner.style.display = 'none';
+            }
+
             showToast(data.cached ? 'Loaded release notes (Cached)' : 'Release notes refreshed successfully!', 'success');
             
+            // Update counts in filter tags
+            updateCategoryCounts();
+
             if (releaseNotes.length > 0) {
                 // If there's an active note, try to keep it, otherwise set first as active
                 if (!activeNote || !releaseNotes.some(n => n.id === activeNote.id)) {
@@ -112,9 +139,38 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('Error fetching release notes:', error);
             showToast(`Error loading release notes: ${error.message}`, 'error');
+            offlineBanner.textContent = `⚠️ Connection error: ${error.message}. Displaying offline view.`;
+            offlineBanner.style.display = 'flex';
         } finally {
             btnRefresh.classList.remove('loading');
         }
+    }
+
+    function updateCategoryCounts() {
+        const counts = {
+            all: releaseNotes.length,
+            feature: 0,
+            fix: 0,
+            change: 0,
+            deprecation: 0
+        };
+        
+        releaseNotes.forEach(note => {
+            note.categories.forEach(cat => {
+                if (cat in counts) {
+                    counts[cat]++;
+                }
+            });
+        });
+        
+        filterButtons.forEach(btn => {
+            const cat = btn.dataset.category;
+            const displayLabel = cat === 'all' ? 'All' :
+                                 cat === 'feature' ? 'Features' :
+                                 cat === 'fix' ? 'Fixes' :
+                                 cat === 'change' ? 'Changes' : 'Deprecations';
+            btn.textContent = `${displayLabel} (${counts[cat] || 0})`;
+        });
     }
 
     function detectCategories(note) {
@@ -180,8 +236,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         filtered.forEach(note => {
+            const isRead = readNotes.includes(note.id);
             const item = document.createElement('div');
-            item.className = `note-item ${activeNote && activeNote.id === note.id ? 'active' : ''}`;
+            item.className = `note-item ${activeNote && activeNote.id === note.id ? 'active' : ''} ${isRead ? 'read' : ''}`;
             
             // Build badges HTML
             const badgesHtml = note.categories.map(cat => 
@@ -194,9 +251,15 @@ document.addEventListener('DOMContentLoaded', () => {
             // Snippet extraction
             const snippet = extractSnippet(note.content);
 
+            // Add unread dot if not read
+            const unreadDotHtml = isRead ? '' : `<span class="unread-dot" title="New update"></span>`;
+
             item.innerHTML = `
                 <div class="note-item-meta">
-                    <span class="note-item-date">${dateDisplay}</span>
+                    <div style="display: flex; align-items: center;">
+                        ${unreadDotHtml}
+                        <span class="note-item-date">${dateDisplay}</span>
+                    </div>
                     <div style="display: flex; gap: 0.25rem; align-items: center;">
                         ${badgesHtml}
                         <button class="btn-copy-card" aria-label="Copy note to clipboard" title="Copy update to clipboard">
@@ -215,6 +278,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const copyText = `${note.title} (${dateDisplay})\n\n${snippet}\n\nRead more: ${note.link}`;
                 
                 navigator.clipboard.writeText(copyText).then(() => {
+                    // Localized tooltip visual feedback
+                    btnCopy.classList.add('copied');
+                    setTimeout(() => btnCopy.classList.remove('copied'), 1500);
                     showToast('Update copied to clipboard!', 'success');
                 }).catch(err => {
                     console.error('Failed to copy: ', err);
@@ -224,9 +290,18 @@ document.addEventListener('DOMContentLoaded', () => {
             
             item.addEventListener('click', () => {
                 activeNote = note;
-                document.querySelectorAll('.note-item').forEach(el => el.classList.remove('active'));
-                item.classList.add('active');
+                
+                // Track read notes
+                if (!readNotes.includes(note.id)) {
+                    readNotes.push(note.id);
+                    localStorage.setItem('bq_read_notes', JSON.stringify(readNotes));
+                }
+                
+                // Slide-in detail view on mobile
+                appContainer.classList.add('show-details');
+                
                 renderDetails();
+                renderList();
             });
             
             notesListContainer.appendChild(item);
@@ -255,6 +330,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     <h2 class="details-title">${activeNote.title}</h2>
                 </div>
                 <div class="details-actions">
+                    <button id="btn-mobile-back" class="btn btn-secondary btn-mobile-back" aria-label="Go back to list">
+                        ← Back
+                    </button>
                     <button id="btn-tweet-action" class="btn btn-tweet">
                         <svg style="width: 16px; height: 16px; fill: currentColor;" viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
                         Tweet Note
@@ -271,8 +349,11 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         `;
 
-        // Wire up tweet action
+        // Wire up actions
         document.getElementById('btn-tweet-action').addEventListener('click', openTweetModal);
+        document.getElementById('btn-mobile-back').addEventListener('click', () => {
+            appContainer.classList.remove('show-details');
+        });
     }
 
     function extractSnippet(html) {
